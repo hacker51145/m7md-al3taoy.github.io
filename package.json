@@ -1,0 +1,12 @@
+{
+  "name": "mohamed-ai-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secure backend for MOHAMED AI",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
