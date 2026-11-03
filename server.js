@@ -113,6 +113,7 @@ async function askGemini(model, message) {
 }
 
 const server = http.createServer(async (req, res) => {
+const pathname = new URL(req.url, "http://localhost").pathname;
   console.log("REQUEST:", req.method, req.url);
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
