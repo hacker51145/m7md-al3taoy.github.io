@@ -1,11 +1,55 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<title>موقع محمد</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101827">
+  <meta name="description" content="MOHAMED AI - مساعدك الشخصي">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <title>MOHAMED AI</title>
 </head>
 <body>
-<h1>أهلاً بكم في موقعي</h1>
-<p>موقعي الأول على الإنترنت ❤️</p>
+  <main class="app">
+    <header class="top">
+      <div class="brand"><div class="logo">M</div><div><h1>MOHAMED AI</h1><p>مساعدك الشخصي</p></div></div>
+      <span class="status"><i></i> جاهز</span>
+    </header>
+
+    <section class="welcome">
+      <p class="eyebrow">هلا والله 👋</p>
+      <h2>وش نقدر نسوي لك اليوم؟</h2>
+      <p>اسألني، تكلم معي، أو أضف تذكيرك.</p>
+    </section>
+
+    <section class="chat" aria-label="المحادثة">
+      <div id="messages" class="messages">
+        <div class="msg assistant">يا هلا! أنا MOHAMED AI. اكتب لي وش تحتاج، أو اضغط المايك وتكلم. حالياً واجهة المساعد جاهزة، وربط الذكاء الاصطناعي يحتاج إعداد الخادم ومفتاح API.</div>
+      </div>
+      <form id="chatForm" class="composer">
+        <input id="prompt" autocomplete="off" placeholder="اكتب رسالتك هنا..." aria-label="رسالتك">
+        <button class="send" type="submit" aria-label="إرسال">➤</button>
+      </form>
+      <div class="tools">
+        <button id="micBtn" class="tool">🎙️ تحدث</button>
+        <button id="speakBtn" class="tool">🔊 قراءة الرد</button>
+        <button id="notifyBtn" class="tool">🔔 تفعيل الإشعارات</button>
+      </div>
+    </section>
+
+    <section class="reminders">
+      <div class="section-head"><h3>تذكير جديد</h3><span>📌</span></div>
+      <form id="reminderForm" class="reminder-form">
+        <input id="reminderText" placeholder="مثلاً: ذكرني أذاكر" required>
+        <input id="reminderTime" type="datetime-local" required>
+        <button type="submit">إضافة</button>
+      </form>
+      <div id="reminderList" class="reminder-list"></div>
+      <p class="hint">ملاحظة: التذكيرات في هذه النسخة محفوظة على جهازك، وقد تحتاج فتح التطبيق وقت التذكير. الإشعارات تعتمد على دعم المتصفح وأذوناته.</p>
+    </section>
+    <footer>MOHAMED AI · النسخة الأولية</footer>
+  </main>
+  <script src="app.js"></script>
 </body>
 </html>
