@@ -1,9 +1,14 @@
+
 const $ = (id) => document.getElementById(id);
 const messages = $("messages");
 
 const API = "https://mohamed-ai-api.onrender.com";
 
-let lastReply = "أهلاً! أنا MOHAMED AI.";
+let lastReply = "أهلاً! أنا العطاوي.";
+
+// ===================================
+// المحادثة النصية
+// ===================================
 
 function addMessage(text, who) {
   const el = document.createElement("div");
@@ -13,7 +18,6 @@ function addMessage(text, who) {
   messages.scrollTop = messages.scrollHeight;
 }
 
-// المحادثة مع Gemini
 $("chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
 
@@ -31,7 +35,6 @@ $("chatForm").addEventListener("submit", async (e) => {
     });
 
     const data = await response.json();
-
     if (!response.ok) throw new Error(data.error);
 
     lastReply = data.reply || "ما وصلني رد واضح.";
@@ -42,10 +45,13 @@ $("chatForm").addEventListener("submit", async (e) => {
   addMessage(lastReply, "assistant");
 });
 
+// ===================================
 // القراءة الصوتية
+// ===================================
+
 $("speakBtn").addEventListener("click", () => {
   if (!("speechSynthesis" in window)) {
-    return alert("ميزة القراءة الصوتية غير مدعومة.");
+    return alert("القراءة الصوتية غير مدعومة.");
   }
 
   speechSynthesis.cancel();
@@ -55,10 +61,14 @@ $("speakBtn").addEventListener("click", () => {
   speechSynthesis.speak(utterance);
 });
 
+// ===================================
 // الإملاء الصوتي
+// ===================================
+
 $("micBtn").addEventListener("click", () => {
   const Recognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
 
   if (!Recognition) {
     return alert("الإملاء الصوتي غير مدعوم في هذا المتصفح.");
@@ -71,11 +81,17 @@ $("micBtn").addEventListener("click", () => {
     $("prompt").value = event.results[0][0].transcript;
   };
 
-  recognition.onerror = () => alert("تأكد من إذن المايك.");
+  recognition.onerror = (event) => {
+    alert("مشكلة في المايك: " + event.error);
+  };
+
   recognition.start();
 });
 
-// تحويل المفتاح العام إلى صيغة Web Push
+// ===================================
+// تحويل مفتاح Web Push
+// ===================================
+
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding)
@@ -86,12 +102,17 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from(raw, char => char.charCodeAt(0));
 }
 
-// تفعيل الإشعارات وربط الاشتراك بالخادم
+// ===================================
+// الإشعارات
+// ===================================
+
 $("notifyBtn").addEventListener("click", async () => {
   try {
-    if (!("serviceWorker" in navigator) ||
-        !("PushManager" in window) ||
-        !("Notification" in window)) {
+    if (
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !("Notification" in window)
+    ) {
       return alert("الإشعارات غير مدعومة في هذا المتصفح.");
     }
 
@@ -102,7 +123,7 @@ $("notifyBtn").addEventListener("click", async () => {
 
     if (isIOS && !isInstalled) {
       return alert(
-        "افتح الموقع من Safari، ثم اختر مشاركة ← إضافة إلى الشاشة الرئيسية، وبعدها افتح التطبيق من الأيقونة."
+        "افتح الموقع من Safari ثم اختر مشاركة ← إضافة إلى الشاشة الرئيسية."
       );
     }
 
@@ -142,7 +163,7 @@ $("notifyBtn").addEventListener("click", async () => {
       throw new Error(saveData.error || "تعذر حفظ الاشتراك.");
     }
 
-    alert("تم تفعيل الإشعارات وربط جهازك بنجاح! ❤️");
+    alert("تم تفعيل الإشعارات بنجاح ❤️");
 
   } catch (error) {
     console.error(error);
@@ -150,7 +171,10 @@ $("notifyBtn").addEventListener("click", async () => {
   }
 });
 
-// نظام التذكيرات الحالي
+// ===================================
+// التذكيرات
+// ===================================
+
 const STORAGE = "mohamed-ai-reminders-v1";
 
 let reminders = JSON.parse(localStorage.getItem(STORAGE) || "[]");
@@ -221,11 +245,13 @@ async function checkReminders() {
       item.notified = true;
       changed = true;
 
-      if ("Notification" in window &&
-          Notification.permission === "granted") {
+      if (
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
         const registration = await navigator.serviceWorker.ready;
 
-        registration.showNotification("تذكير من MOHAMED AI", {
+        registration.showNotification("تذكير من العطاوي", {
           body: item.text,
           icon: "./icon.svg"
         });
@@ -239,35 +265,78 @@ async function checkReminders() {
 }
 
 renderReminders();
-
 setInterval(checkReminders, 15000);
 checkReminders();
+
+// ===================================
+// Service Worker
+// ===================================
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(console.error);
   });
 }
-// مكالمة صوتية مع العطاوي
+
+// ===================================
+// مكالمة العطاوي الصوتية
+// ===================================
+
 let voiceCallActive = false;
 let voiceRecognition = null;
+let voiceBusy = false;
+let voiceStarting = false;
+
+function updateCallButtons(active) {
+  const start = $("voiceCallBtn");
+  const end = $("endCallBtn");
+
+  if (start) start.style.display = active ? "none" : "inline-block";
+  if (end) end.style.display = active ? "inline-block" : "none";
+}
 
 function startAlAtawiCall() {
   const Recognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
 
   if (!Recognition) {
-    alert("المتصفح لا يدعم المحادثة الصوتية.");
+    alert("التعرف على الصوت غير مدعوم. جرّب Safari أو Chrome.");
     return;
   }
 
+  if (!window.isSecureContext) {
+    alert("افتح العطاوي عبر رابط HTTPS.");
+    return;
+  }
+
+  if (voiceCallActive) return;
+
   voiceCallActive = true;
+  voiceBusy = false;
+  voiceStarting = false;
+
   voiceRecognition = new Recognition();
   voiceRecognition.lang = "ar-SA";
   voiceRecognition.continuous = false;
+  voiceRecognition.interimResults = false;
+  voiceRecognition.maxAlternatives = 1;
+
+  voiceRecognition.onstart = () => {
+    voiceStarting = false;
+    console.log("العطاوي يسمعك الآن 🎙️");
+  };
 
   voiceRecognition.onresult = async (event) => {
-    const message = event.results[0][0].transcript;
+    const message = event.results[0][0].transcript.trim();
+
+    if (!message || !voiceCallActive || voiceBusy) return;
+
+    voiceBusy = true;
+
+    console.log("سمعتك:", message);
+
+    addMessage(message, "user");
 
     try {
       const response = await fetch(`${API}/api/chat`, {
@@ -277,44 +346,135 @@ function startAlAtawiCall() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
 
-      const speech = new SpeechSynthesisUtterance(data.reply);
-      speech.lang = "ar-SA";
+      if (!response.ok) {
+        throw new Error(data.error || "فشل الاتصال بالخادم.");
+      }
 
-      speech.onend = () => {
-        if (voiceCallActive) voiceRecognition.start();
+      lastReply = data.reply || "ما قدرت أجهز الرد.";
+      addMessage(lastReply, "assistant");
+
+      if (!voiceCallActive) {
+        voiceBusy = false;
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(lastReply);
+      utterance.lang = "ar-SA";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+
+      utterance.onend = () => {
+        voiceBusy = false;
+        if (voiceCallActive) {
+          setTimeout(startListeningAgain, 700);
+        }
       };
 
-      speechSynthesis.speak(speech);
+      utterance.onerror = () => {
+        voiceBusy = false;
+        if (voiceCallActive) {
+          setTimeout(startListeningAgain, 700);
+        }
+      };
+
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utterance);
+
     } catch (error) {
-      alert("تعذر الاتصال بالعطاوي.");
+      console.error("خطأ المكالمة:", error);
+      voiceBusy = false;
+      addMessage("تعذر الاتصال بالعطاوي: " + error.message, "assistant");
+
+      if (voiceCallActive) {
+        setTimeout(startListeningAgain, 1000);
+      }
+    }
+  };
+
+  voiceRecognition.onerror = (event) => {
+    console.error("خطأ التعرف الصوتي:", event.error);
+    voiceStarting = false;
+
+    if (event.error === "not-allowed" ||
+        event.error === "service-not-allowed") {
+      alert("اسمح للمتصفح باستخدام المايك من إعدادات الموقع.");
       stopAlAtawiCall();
+      return;
+    }
+
+    if (event.error === "aborted") return;
+
+    if (voiceCallActive && !voiceBusy) {
+      setTimeout(startListeningAgain, 1000);
     }
   };
 
   voiceRecognition.onend = () => {
-    if (voiceCallActive && !speechSynthesis.speaking) {
-      voiceRecognition.start();
+    voiceStarting = false;
+
+    if (voiceCallActive && !voiceBusy) {
+      setTimeout(startListeningAgain, 700);
     }
   };
 
-  voiceRecognition.start();
+  updateCallButtons(true);
+  startListeningAgain();
+}
+
+function startListeningAgain() {
+  if (
+    !voiceCallActive ||
+    !voiceRecognition ||
+    voiceBusy ||
+    voiceStarting
+  ) {
+    return;
+  }
+
+  try {
+    voiceStarting = true;
+    voiceRecognition.start();
+  } catch (error) {
+    voiceStarting = false;
+    console.log("تعذر بدء الاستماع:", error.message);
+  }
 }
 
 function stopAlAtawiCall() {
   voiceCallActive = false;
-  speechSynthesis.cancel();
-  if (voiceRecognition) voiceRecognition.stop();
-}
-document.getElementById("voiceCallBtn").addEventListener("click", () => {
-  startAlAtawiCall();
-  document.getElementById("voiceCallBtn").style.display = "none";
-  document.getElementById("endCallBtn").style.display = "inline-block";
-});
+  voiceBusy = false;
+  voiceStarting = false;
 
-document.getElementById("endCallBtn").addEventListener("click", () => {
-  stopAlAtawiCall();
-  document.getElementById("voiceCallBtn").style.display = "inline-block";
-  document.getElementById("endCallBtn").style.display = "none";
-});
+  if ("speechSynthesis" in window) {
+    speechSynthesis.cancel();
+  }
+
+  if (voiceRecognition) {
+    const oldRecognition = voiceRecognition;
+    voiceRecognition = null;
+
+    oldRecognition.onend = null;
+    oldRecognition.onerror = null;
+
+    try {
+      oldRecognition.stop();
+    } catch (error) {
+      console.log(error);
+    }
+  }
+
+  updateCallButtons(false);
+  console.log("انتهت مكالمة العطاوي.");
+}
+
+// ربط الأزرار
+if ($("voiceCallBtn") && $("endCallBtn")) {
+  $("voiceCallBtn").addEventListener("click", () => {
+    startAlAtawiCall();
+  });
+
+  $("endCallBtn").addEventListener("click", () => {
+    stopAlAtawiCall();
+  });
+}
