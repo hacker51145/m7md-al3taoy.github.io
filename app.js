@@ -248,3 +248,62 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(console.error);
   });
 }
+// مكالمة صوتية مع العطاوي
+let voiceCallActive = false;
+let voiceRecognition = null;
+
+function startAlAtawiCall() {
+  const Recognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!Recognition) {
+    alert("المتصفح لا يدعم المحادثة الصوتية.");
+    return;
+  }
+
+  voiceCallActive = true;
+  voiceRecognition = new Recognition();
+  voiceRecognition.lang = "ar-SA";
+  voiceRecognition.continuous = false;
+
+  voiceRecognition.onresult = async (event) => {
+    const message = event.results[0][0].transcript;
+
+    try {
+      const response = await fetch(`${API}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+
+      const speech = new SpeechSynthesisUtterance(data.reply);
+      speech.lang = "ar-SA";
+
+      speech.onend = () => {
+        if (voiceCallActive) voiceRecognition.start();
+      };
+
+      speechSynthesis.speak(speech);
+    } catch (error) {
+      alert("تعذر الاتصال بالعطاوي.");
+      stopAlAtawiCall();
+    }
+  };
+
+  voiceRecognition.onend = () => {
+    if (voiceCallActive && !speechSynthesis.speaking) {
+      voiceRecognition.start();
+    }
+  };
+
+  voiceRecognition.start();
+}
+
+function stopAlAtawiCall() {
+  voiceCallActive = false;
+  speechSynthesis.cancel();
+  if (voiceRecognition) voiceRecognition.stop();
+}
