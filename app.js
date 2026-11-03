@@ -17,7 +17,7 @@ $("chatForm").addEventListener("submit", async (e) => {
   $("prompt").value = "";
   // نقطة الربط بالخادم: أنشئ /api/chat لاحقاً وضعه على نفس النطاق.
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch("https://mohamed-ai-api.onrender.com/api/chat", {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({message:value})
     });
