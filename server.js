@@ -113,6 +113,7 @@ async function askGemini(model, message) {
 }
 
 const server = http.createServer(async (req, res) => {
+  console.log("REQUEST:", req.method, req.url);
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": SITE_ORIGIN,
