@@ -307,3 +307,14 @@ function stopAlAtawiCall() {
   speechSynthesis.cancel();
   if (voiceRecognition) voiceRecognition.stop();
 }
+document.getElementById("voiceCallBtn").addEventListener("click", () => {
+  startAlAtawiCall();
+  document.getElementById("voiceCallBtn").style.display = "none";
+  document.getElementById("endCallBtn").style.display = "inline-block";
+});
+
+document.getElementById("endCallBtn").addEventListener("click", () => {
+  stopAlAtawiCall();
+  document.getElementById("voiceCallBtn").style.display = "inline-block";
+  document.getElementById("endCallBtn").style.display = "none";
+});
