@@ -125,7 +125,7 @@ const pathname = new URL(req.url, "http://localhost").pathname;
   }
 
   try {
-    if (req.method === "GET" && req.url === "/") {
+    if (req.method === "GET" && pathname === "/") {
       return send(res, 200, {
         ok: true,
         service: "MOHAMED AI API"
