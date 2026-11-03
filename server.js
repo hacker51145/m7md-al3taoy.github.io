@@ -141,7 +141,7 @@ const pathname = new URL(req.url, "http://localhost").pathname;
       });
     }
 
-    if (req.method === "POST" && req.url === "/api/push/subscribe") {
+    if (req.method === "POST" && pathname === "/api/push/public-key") {
       const body = await readBody(req);
       const sub = body.subscription;
 
