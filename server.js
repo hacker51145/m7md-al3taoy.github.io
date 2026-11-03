@@ -63,6 +63,7 @@ function readBody(req) {
   });
 }
 
+// Supabase
 async function supabase(path, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     throw new Error("Supabase is not configured");
@@ -81,17 +82,25 @@ async function supabase(path, options = {}) {
     }
   );
 
+  const result = await response.text();
+
   if (!response.ok) {
-    const error = await response.text();
-    console.error("Supabase error:", error);
+    console.error("Supabase error:", result);
     throw new Error("Supabase request failed");
   }
 
-  return response.status === 204
-    ? null
-    : response.json();
+  if (!result.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(result);
+  } catch {
+    return result;
+  }
 }
 
+// Gemini
 async function askGemini(model, message) {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -139,6 +148,7 @@ async function askGemini(model, message) {
   return reply;
 }
 
+// Server
 const server = http.createServer(async (req, res) => {
   const pathname = new URL(
     req.url,
@@ -158,7 +168,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-
     // فحص الخادم
     if (req.method === "GET" && pathname === "/") {
       return send(res, 200, {
@@ -169,7 +178,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // إرسال المفتاح العام للواجهة
+    // المفتاح العام للإشعارات
     if (
       req.method === "GET" &&
       pathname === "/api/push/public-key"
@@ -185,7 +194,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // تسجيل اشتراك الإشعارات في Supabase
+    // تسجيل اشتراك الإشعارات
     if (
       req.method === "POST" &&
       pathname === "/api/push/subscribe"
