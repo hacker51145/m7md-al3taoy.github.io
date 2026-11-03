@@ -21,12 +21,17 @@ $("chatForm").addEventListener("submit", async (e) => {
       method: "POST", headers: {"Content-Type":"application/json"},
       body: JSON.stringify({message:value})
     });
-    if (!response.ok) throw new Error("API not configured");
     const data = await response.json();
-    lastReply = data.reply || "ما وصلني رد واضح.";
-  } catch {
-    lastReply = "وصلتني رسالتك 👍 الواجهة تعمل، لكن الذكاء الاصطناعي غير مربوط بعد. نحتاج إعداد خادم آمن ومفتاح API حتى أرد عليك فعلياً.";
-  }
+
+if (!response.ok) {
+  throw new Error(data.error || "خطأ في الخادم");
+}
+
+lastReply = data.reply || "ما وصلني رد واضح.";
+
+} catch (error) {
+  lastReply = "سبب المشكلة: " + error.message;
+}
   addMessage(lastReply, "assistant");
 });
 $("speakBtn").addEventListener("click", () => {
