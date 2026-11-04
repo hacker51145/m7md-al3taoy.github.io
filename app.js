@@ -93,11 +93,54 @@ function addRoomMessage(item) {
 
   const who = item.sender_type === "assistant" ? "assistant" : "user";
 
-  addMessage(
-    item.content,
-    who,
-    item.sender_name
-  );
+  // عرض الرسالة الصوتية كمقطع قابل للتشغيل
+  if (item.message_type === "audio" && item.audio_path) {
+    const el = document.createElement("div");
+    el.className = `msg ${who} audio-msg`;
+
+    if (item.sender_name) {
+      const name = document.createElement("strong");
+      name.className = "sender-name";
+      name.textContent = item.sender_name;
+      el.appendChild(name);
+    }
+
+    const label = document.createElement("div");
+    label.className = "audio-label";
+    label.textContent = "🎤 رسالة صوتية";
+    el.appendChild(label);
+
+    const player = document.createElement("audio");
+    player.controls = true;
+    player.preload = "none";
+    player.setAttribute("aria-label", "تشغيل الرسالة الصوتية");
+    player.style.width = "min(260px, 100%)";
+    player.style.marginTop = "8px";
+    el.appendChild(player);
+
+    const loading = document.createElement("small");
+    loading.textContent = "جاري تجهيز الصوت...";
+    el.appendChild(loading);
+
+    messages.appendChild(el);
+    messages.scrollTop = messages.scrollHeight;
+
+    post("/api/rooms/audio-url", {
+      roomId: room.roomId,
+      accessToken: room.accessToken,
+      audioPath: item.audio_path
+    }).then(data => {
+      player.src = data.signedUrl;
+      loading.remove();
+    }).catch(error => {
+      loading.textContent = "تعذر تحميل المقطع الصوتي.";
+      console.error(error);
+    });
+
+    return;
+  }
+
+  addMessage(item.content, who, item.sender_name);
 
   if (item.sender_type === "assistant") {
     lastReply = item.content;
@@ -428,7 +471,7 @@ async function decideRequest(memberId, decision) {
 }
 
 // ===================================
-// إرسال الرسائل
+// إرسال الرسائل النصية
 // ===================================
 
 $("chatForm").addEventListener("submit", async (e) => {
@@ -517,30 +560,326 @@ $("speakBtn").addEventListener("click", () => {
 });
 
 // ===================================
-// الإملاء الصوتي
+// تسجيل وإرسال الرسائل الصوتية الحقيقية
+// اضغط مطولاً للتسجيل ثم ارفع إصبعك للإرسال
 // ===================================
 
-$("micBtn").addEventListener("click", () => {
-  const Recognition =
-    window.SpeechRecognition ||
-    window.webkitSpeechRecognition;
+let mediaRecorder = null;
+let recordingStream = null;
+let recordingChunks = [];
+let recordingActive = false;
+let recordingPointerId = null;
+let recordingReleased = false;
 
-  if (!Recognition) {
-    return alert("الإملاء الصوتي غير مدعوم في هذا المتصفح.");
+const micButton = $("micBtn");
+
+const recordingIndicator = document.createElement("div");
+recordingIndicator.id = "recordingIndicator";
+recordingIndicator.hidden = true;
+recordingIndicator.textContent = "🔴 جاري التسجيل... ارفع إصبعك للإرسال";
+recordingIndicator.style.cssText =
+  "padding:8px 14px;text-align:center;color:#e74c3c;font-size:13px;font-weight:600;";
+
+$("chatForm").parentElement.insertBefore(
+  recordingIndicator,
+  $("chatForm")
+);
+
+// تحويل الصوت إلى WAV حتى يفهمه الخادم
+function audioBufferToWav(audioBuffer) {
+  const channels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const length = audioBuffer.length;
+  const mono = new Float32Array(length);
+
+  for (let channel = 0; channel < channels; channel++) {
+    const data = audioBuffer.getChannelData(channel);
+
+    for (let i = 0; i < length; i++) {
+      mono[i] += data[i] / channels;
+    }
   }
 
-  const recognition = new Recognition();
-  recognition.lang = "ar-SA";
+  const buffer = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(buffer);
 
-  recognition.onresult = (event) => {
-    $("prompt").value = event.results[0][0].transcript;
-  };
+  function writeString(offset, value) {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  }
 
-  recognition.onerror = (event) => {
-    alert("مشكلة في المايك: " + event.error);
-  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, length * 2, true);
 
-  recognition.start();
+  let offset = 44;
+
+  for (let i = 0; i < length; i++) {
+    const sample = Math.max(-1, Math.min(1, mono[i]));
+
+    view.setInt16(
+      offset,
+      sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+      true
+    );
+
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function convertRecordingToWav(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+
+  const AudioContextClass =
+    window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error("تحويل الصوت غير مدعوم في هذا المتصفح.");
+  }
+
+  const context = new AudioContextClass();
+
+  try {
+    const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+    return audioBufferToWav(decoded);
+  } finally {
+    await context.close();
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onloadend = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+
+      if (comma < 0) {
+        return reject(new Error("تعذر قراءة التسجيل."));
+      }
+
+      resolve(result.slice(comma + 1));
+    };
+
+    reader.onerror = () => reject(new Error("تعذر قراءة التسجيل."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function cleanupRecording() {
+  recordingActive = false;
+
+  if (recordingStream) {
+    recordingStream.getTracks().forEach(track => track.stop());
+    recordingStream = null;
+  }
+
+  micButton.classList.remove("recording");
+  micButton.setAttribute(
+    "aria-label",
+    "اضغط مطولاً لتسجيل رسالة صوتية"
+  );
+}
+
+async function startVoiceMessage() {
+  if (recordingActive) return;
+
+  if (!room || pendingJoin) {
+    alert("لازم تكون داخل غرفة ومقبول من صاحبها عشان ترسل فويس.");
+    recordingPointerId = null;
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    alert("تسجيل الصوت غير مدعوم. افتح الموقع من Safari أو Chrome عبر HTTPS.");
+    recordingPointerId = null;
+    return;
+  }
+
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    // إذا رفع المستخدم إصبعه قبل ظهور نافذة إذن المايك
+    if (recordingReleased) {
+      cleanupRecording();
+      return;
+    }
+
+    recordingChunks = [];
+
+    const mimeCandidates = [
+      "audio/mp4",
+      "audio/webm;codecs=opus",
+      "audio/webm"
+    ];
+
+    const selectedMime = mimeCandidates.find(type =>
+      MediaRecorder.isTypeSupported(type)
+    );
+
+    mediaRecorder = selectedMime
+      ? new MediaRecorder(recordingStream, { mimeType: selectedMime })
+      : new MediaRecorder(recordingStream);
+
+    mediaRecorder.ondataavailable = event => {
+      if (event.data && event.data.size) {
+        recordingChunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onerror = event => {
+      console.error("MediaRecorder error:", event.error);
+      alert("حدثت مشكلة أثناء تسجيل الصوت.");
+      cleanupRecording();
+      recordingIndicator.hidden = true;
+    };
+
+    mediaRecorder.onstop = async () => {
+      const recordedBlob = new Blob(recordingChunks, {
+        type: mediaRecorder?.mimeType || "audio/webm"
+      });
+
+      cleanupRecording();
+
+      if (!recordedBlob.size) {
+        recordingIndicator.hidden = true;
+        return;
+      }
+
+      recordingIndicator.hidden = false;
+      recordingIndicator.textContent =
+        "⏳ جاري تجهيز وإرسال الرسالة الصوتية...";
+
+      try {
+        const wavBlob = await convertRecordingToWav(recordedBlob);
+        const audioBase64 = await blobToBase64(wavBlob);
+
+        await post("/api/rooms/audio", {
+          roomId: room.roomId,
+          accessToken: room.accessToken,
+          mimeType: "audio/wav",
+          audioBase64
+        });
+
+        await loadRoomMessages();
+
+      } catch (error) {
+        alert("تعذر إرسال التسجيل: " + error.message);
+
+      } finally {
+        recordingIndicator.hidden = true;
+        recordingIndicator.textContent =
+          "🔴 جاري التسجيل... ارفع إصبعك للإرسال";
+      }
+    };
+
+    mediaRecorder.start(250);
+    recordingActive = true;
+
+    recordingIndicator.hidden = false;
+    recordingIndicator.textContent =
+      "🔴 جاري التسجيل... ارفع إصبعك للإرسال";
+
+    micButton.classList.add("recording");
+    micButton.setAttribute(
+      "aria-label",
+      "جاري التسجيل، ارفع إصبعك للإرسال"
+    );
+
+    // إذا انتهى الضغط أثناء انتظار تشغيل المسجل
+    if (recordingReleased) {
+      stopVoiceMessage();
+    }
+
+  } catch (error) {
+    cleanupRecording();
+    recordingPointerId = null;
+
+    alert(
+      error.name === "NotAllowedError"
+        ? "اسمح للموقع باستخدام المايك من إعدادات المتصفح."
+        : "تعذر تشغيل المايك: " + error.message
+    );
+  }
+}
+
+function stopVoiceMessage() {
+  if (!recordingActive || !mediaRecorder) return;
+
+  if (mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+  }
+}
+
+micButton.setAttribute(
+  "aria-label",
+  "اضغط مطولاً لتسجيل رسالة صوتية"
+);
+
+micButton.title = "اضغط مطولاً لتسجيل فويس";
+
+micButton.addEventListener("pointerdown", async event => {
+  event.preventDefault();
+
+  if (recordingActive || recordingPointerId !== null) return;
+
+  recordingPointerId = event.pointerId;
+  recordingReleased = false;
+
+  try {
+    micButton.setPointerCapture(event.pointerId);
+  } catch {}
+
+  await startVoiceMessage();
+});
+
+micButton.addEventListener("pointerup", event => {
+  if (
+    recordingPointerId !== null &&
+    event.pointerId !== recordingPointerId
+  ) return;
+
+  recordingReleased = true;
+  stopVoiceMessage();
+  recordingPointerId = null;
+});
+
+micButton.addEventListener("pointercancel", () => {
+  recordingReleased = true;
+  stopVoiceMessage();
+  recordingPointerId = null;
+});
+
+micButton.addEventListener("lostpointercapture", () => {
+  if (recordingActive) {
+    recordingReleased = true;
+    stopVoiceMessage();
+    recordingPointerId = null;
+  }
+});
+
+micButton.addEventListener("contextmenu", event => {
+  event.preventDefault();
 });
 
 // ===================================
@@ -549,6 +888,7 @@ $("micBtn").addEventListener("click", () => {
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
+
   const base64 = (base64String + padding)
     .replace(/-/g, "+")
     .replace(/_/g, "/");
@@ -576,6 +916,7 @@ $("notifyBtn").addEventListener("click", async () => {
     }
 
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
     const isInstalled =
       window.navigator.standalone ||
       window.matchMedia("(display-mode: standalone)").matches;
@@ -593,7 +934,6 @@ $("notifyBtn").addEventListener("click", async () => {
     }
 
     const registration = await navigator.serviceWorker.ready;
-
     const keyData = await api("/api/push/public-key");
 
     let subscription =
@@ -682,6 +1022,7 @@ function setMuted(muted) {
         console.log(error);
       }
     }
+
   } else {
     setCallSubtitle("يسمعك الآن...");
     startListeningAgain();
@@ -767,6 +1108,7 @@ function startListeningAgain() {
 
   recognition.onresult = async (event) => {
     if (handled) return;
+
     handled = true;
     receivedResult = true;
 
@@ -802,8 +1144,10 @@ function startListeningAgain() {
           accessToken: room.accessToken,
           content: message
         });
+
       } else if (room && pendingJoin) {
         throw new Error("انتظر موافقة صاحب الغرفة.");
+
       } else {
         data = await post("/api/chat", { message });
       }
@@ -845,7 +1189,11 @@ function startListeningAgain() {
       if (!voiceCallActive || thisSession !== callSession) return;
 
       voiceBusy = false;
-      addMessage("تعذر الاتصال بالعطاوي: " + error.message, "assistant");
+
+      addMessage(
+        "تعذر الاتصال بالعطاوي: " + error.message,
+        "assistant"
+      );
 
       if (!callMuted) {
         setCallSubtitle("يسمعك الآن...");
@@ -897,6 +1245,7 @@ function startListeningAgain() {
 
   try {
     recognition.start();
+
   } catch (error) {
     voiceStarting = false;
     console.error("تعذر بدء الاستماع:", error);
