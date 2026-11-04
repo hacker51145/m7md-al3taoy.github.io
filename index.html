@@ -13,6 +13,7 @@
 </head>
 <body>
   <main class="app" id="mainApp">
+
     <header class="top">
       <div class="brand">
         <div class="logo">M</div>
@@ -21,16 +22,19 @@
           <p>مساعدك الشخصي</p>
         </div>
       </div>
-      <span class="status"><i></i> جاهز</span>
+
+      <div class="header-actions">
+        <button id="voiceCallBtn" class="header-btn" title="مكالمة صوتية">📞</button>
+        <button id="addFriendBtn" class="header-btn" title="إضافة صديق">👥</button>
+        <button id="requestsBtn" class="header-btn" title="طلبات الانضمام">
+          🔔 <span id="requestBadge" hidden>0</span>
+        </button>
+      </div>
     </header>
 
-    <section class="welcome">
-      <p class="eyebrow">هلا والله 👋</p>
-      <h2>وش نقدر نسوي لك اليوم؟</h2>
-      <p>اسألني، تكلم معي، أو أضف تذكيرك.</p>
-    </section>
-
     <section class="chat" aria-label="المحادثة">
+      <div id="roomInfo" class="room-info" hidden></div>
+
       <div id="messages" class="messages">
         <div class="msg assistant">
           ارحبووو يارجال معك العطاوي من صنع محمد العطاوي وش بغيت؟
@@ -38,38 +42,62 @@
       </div>
 
       <form id="chatForm" class="composer">
+        <button type="button" id="micBtn" class="icon-btn" title="تحدث">🎙️</button>
         <input id="prompt" autocomplete="off" placeholder="اكتب رسالتك هنا..." aria-label="رسالتك">
         <button class="send" type="submit" aria-label="إرسال">➤</button>
       </form>
 
       <div class="tools">
-        <button id="micBtn" class="tool">🎙️ تحدث</button>
         <button id="speakBtn" class="tool">🔊 قراءة الرد</button>
-        <button id="voiceCallBtn" class="tool">📞 اتصل على العطاوي</button>
         <button id="notifyBtn" class="tool">🔔 تفعيل الإشعارات</button>
       </div>
     </section>
 
-    <section class="reminders">
-      <div class="section-head">
-        <h3>تذكير جديد</h3>
-        <span>📌</span>
-      </div>
-
-      <form id="reminderForm" class="reminder-form">
-        <input id="reminderText" placeholder="مثلاً: ذكرني أذاكر" required>
-        <input id="reminderTime" type="datetime-local" required>
-        <button type="submit">إضافة</button>
-      </form>
-
-      <div id="reminderList" class="reminder-list"></div>
-      <p class="hint">
-        التذكيرات محفوظة على جهازك وقد تحتاج فتح التطبيق وقت التذكير.
-      </p>
-    </section>
-
     <footer>العطاوي · النسخة الأولية</footer>
   </main>
+
+  <!-- نافذة إنشاء غرفة -->
+  <section id="createRoomModal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" data-close="createRoomModal">×</button>
+      <h2>أضف صديقك 👥</h2>
+      <p>أنشئ غرفة محادثة وشارك رابط الدعوة مع صديقك.</p>
+
+      <label for="ownerName">اسمك</label>
+      <input id="ownerName" maxlength="40" placeholder="اكتب اسمك">
+
+      <button id="createRoomBtn" class="primary-btn">إنشاء رابط الدعوة</button>
+
+      <div id="inviteResult" hidden>
+        <p>رابط الدعوة الخاص بك:</p>
+        <input id="inviteLink" readonly>
+        <button id="copyInviteBtn" class="primary-btn">نسخ الرابط</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- نافذة طلب الانضمام -->
+  <section id="joinRoomModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>طلب الانضمام إلى الغرفة</h2>
+      <p>اكتب اسمك لإرسال طلب إلى صاحب الغرفة.</p>
+
+      <input id="joinName" maxlength="40" placeholder="اسمك">
+      <button id="joinRoomBtn" class="primary-btn">إرسال طلب الانضمام</button>
+      <p id="joinStatus" class="modal-status"></p>
+    </div>
+  </section>
+
+  <!-- نافذة طلبات الأصدقاء -->
+  <section id="requestsModal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" data-close="requestsModal">×</button>
+      <h2>طلبات الانضمام</h2>
+      <div id="requestsList" class="requests-list">
+        <p>لا توجد طلبات حالياً.</p>
+      </div>
+    </div>
+  </section>
 
   <!-- واجهة المكالمة -->
   <section id="callScreen" class="call-screen" hidden>
@@ -82,9 +110,7 @@
 
     <div class="call-center">
       <div class="avatar-ring" id="avatarRing">
-        <div class="avatar">
-          <span>ع</span>
-        </div>
+        <div class="avatar"><span>ع</span></div>
       </div>
 
       <h2>العطاوي</h2>
