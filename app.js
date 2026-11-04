@@ -698,8 +698,9 @@ function cleanupRecording() {
 async function startVoiceMessage() {
   if (recordingActive) return;
 
-  if (!room || pendingJoin) {
-    alert("لازم تكون داخل غرفة ومقبول من صاحبها عشان ترسل فويس.");
+  // نمنع التسجيل فقط إذا كان طلب الانضمام لا يزال معلقاً
+  if (room && pendingJoin) {
+    alert("انتظر موافقة صاحب الغرفة أولاً.");
     recordingPointerId = null;
     return;
   }
@@ -774,14 +775,29 @@ async function startVoiceMessage() {
         const wavBlob = await convertRecordingToWav(recordedBlob);
         const audioBase64 = await blobToBase64(wavBlob);
 
-        await post("/api/rooms/audio", {
-          roomId: room.roomId,
-          accessToken: room.accessToken,
-          mimeType: "audio/wav",
-          audioBase64
-        });
+        if (room) {
+          // إرسال الفويس داخل المجموعة
+          await post("/api/rooms/audio", {
+            roomId: room.roomId,
+            accessToken: room.accessToken,
+            mimeType: "audio/wav",
+            audioBase64
+          });
 
-        await loadRoomMessages();
+          await loadRoomMessages();
+
+        } else {
+          // إرسال الفويس في المحادثة الفردية
+          addMessage("🎤 أرسلت رسالة صوتية", "user");
+
+          const data = await post("/api/chat/audio", {
+            mimeType: "audio/wav",
+            audioBase64
+          });
+
+          lastReply = data.reply || "ما وصلني رد واضح.";
+          addMessage(lastReply, "assistant");
+        }
 
       } catch (error) {
         alert("تعذر إرسال التسجيل: " + error.message);
