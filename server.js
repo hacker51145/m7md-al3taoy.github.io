@@ -756,6 +756,56 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // استقبال فويس المحادثة الفردية بدون الحاجة إلى غرفة
+    if (req.method === "POST" && pathname === "/api/chat/audio") {
+      if (!API_KEY) {
+        return send(res, 500, { error: "Gemini API key missing" });
+      }
+
+      const body = await readBody(req);
+
+      const mimeType = String(body.mimeType || "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+
+      if (mimeType !== "audio/wav") {
+        return send(res, 400, { error: "يجب إرسال التسجيل بصيغة WAV." });
+      }
+
+      const base64Audio = String(body.audioBase64 || "");
+
+      if (!base64Audio || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64Audio)) {
+        return send(res, 400, { error: "ملف الصوت غير صالح." });
+      }
+
+      const audioBuffer = Buffer.from(base64Audio, "base64");
+
+      if (!audioBuffer.length || audioBuffer.length > 14 * 1024 * 1024) {
+        return send(res, 400, { error: "حجم التسجيل كبير جداً." });
+      }
+
+      try {
+        const result = await getGeminiAudioReply(
+          base64Audio,
+          [],
+          "المستخدم"
+        );
+
+        return send(res, 200, {
+          ok: true,
+          reply: result.reply,
+          model: result.model
+        });
+      } catch (error) {
+        console.error("Personal audio error:", error.message);
+
+        return send(res, 503, {
+          error: error.message || "تعذر فهم التسجيل الصوتي حالياً."
+        });
+      }
+    }
+
     // المحادثة القديمة مع Gemini - تبقى شغالة
     if (req.method === "POST" && pathname === "/api/chat") {
       if (!API_KEY) {
