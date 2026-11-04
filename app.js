@@ -1,21 +1,435 @@
 
 const $ = (id) => document.getElementById(id);
+const API = "https://mohamed-ai-api.onrender.com";
+const STORAGE = "mohamed-ai-room-v1";
+
+let lastReply = "أهلاً! أنا العطاوي.";
+let room = JSON.parse(localStorage.getItem(STORAGE) || "null");
+let lastMessageId = 0;
+let roomPolling = null;
+let requestPolling = null;
+let pendingJoin = false;
+
 const messages = $("messages");
 
-const API = "https://mohamed-ai-api.onrender.com";
-let lastReply = "أهلاً! أنا العطاوي.";
-
 // ===================================
-// المحادثة النصية
+// أدوات عامة
 // ===================================
 
-function addMessage(text, who) {
+async function api(path, options = {}) {
+  const response = await fetch(API + path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers
+    }
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "حدث خطأ في الاتصال.");
+  }
+
+  return data;
+}
+
+function post(path, body) {
+  return api(path, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
+function saveRoom() {
+  if (room) {
+    localStorage.setItem(STORAGE, JSON.stringify(room));
+  } else {
+    localStorage.removeItem(STORAGE);
+  }
+}
+
+function showModal(id) {
+  $(id).hidden = false;
+}
+
+function hideModal(id) {
+  $(id).hidden = true;
+}
+
+document.querySelectorAll("[data-close]").forEach(button => {
+  button.addEventListener("click", () => {
+    hideModal(button.dataset.close);
+  });
+});
+
+// ===================================
+// عرض الرسائل
+// ===================================
+
+function addMessage(text, who, senderName = "") {
   const el = document.createElement("div");
   el.className = `msg ${who}`;
-  el.textContent = text;
+
+  if (senderName) {
+    const name = document.createElement("strong");
+    name.className = "sender-name";
+    name.textContent = senderName;
+    el.appendChild(name);
+  }
+
+  const content = document.createElement("div");
+  content.textContent = text;
+  el.appendChild(content);
+
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
 }
+
+function addRoomMessage(item) {
+  if (!item || !item.id || item.id <= lastMessageId) return;
+
+  lastMessageId = item.id;
+
+  const who = item.sender_type === "assistant" ? "assistant" : "user";
+
+  addMessage(
+    item.content,
+    who,
+    item.sender_name
+  );
+
+  if (item.sender_type === "assistant") {
+    lastReply = item.content;
+  }
+}
+
+function renderRoomInfo(text) {
+  const info = $("roomInfo");
+  info.hidden = !text;
+  info.textContent = text || "";
+}
+
+function clearMessages() {
+  messages.replaceChildren();
+  lastMessageId = 0;
+}
+
+// ===================================
+// إنشاء غرفة ودعوة صديق
+// ===================================
+
+$("addFriendBtn").addEventListener("click", () => {
+  if (room?.role === "owner") {
+    showModal("createRoomModal");
+    $("inviteResult").hidden = false;
+    return;
+  }
+
+  if (room) {
+    alert("أنت داخل غرفة بالفعل على هذا الجهاز.");
+    return;
+  }
+
+  showModal("createRoomModal");
+});
+
+$("createRoomBtn").addEventListener("click", async () => {
+  const ownerName = $("ownerName").value.trim();
+
+  if (!ownerName) {
+    alert("اكتب اسمك أولاً.");
+    return;
+  }
+
+  const button = $("createRoomBtn");
+  button.disabled = true;
+  button.textContent = "جاري إنشاء الغرفة...";
+
+  try {
+    const data = await post("/api/rooms/create", {
+      ownerName
+    });
+
+    room = {
+      roomId: data.roomId,
+      accessToken: data.accessToken,
+      memberId: data.memberId,
+      role: "owner",
+      displayName: ownerName
+    };
+
+    saveRoom();
+
+    const inviteUrl = new URL(window.location.href);
+    inviteUrl.search = "";
+    inviteUrl.hash = "";
+    inviteUrl.searchParams.set("invite", data.inviteCode);
+
+    $("inviteLink").value = inviteUrl.toString();
+    $("inviteResult").hidden = false;
+
+    button.textContent = "تم إنشاء الغرفة";
+
+    await activateRoom();
+    alert("تم إنشاء الغرفة بنجاح. انسخ الرابط وأرسله لصديقك.");
+
+  } catch (error) {
+    alert(error.message);
+    button.textContent = "إنشاء رابط الدعوة";
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("copyInviteBtn").addEventListener("click", async () => {
+  const link = $("inviteLink").value;
+
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("تم نسخ رابط الدعوة ❤️");
+  } catch {
+    $("inviteLink").select();
+    document.execCommand("copy");
+    alert("تم نسخ الرابط.");
+  }
+});
+
+// ===================================
+// استقبال رابط دعوة
+// ===================================
+
+const inviteCode = new URLSearchParams(location.search).get("invite");
+
+if (inviteCode && !room) {
+  showModal("joinRoomModal");
+}
+
+$("joinRoomBtn").addEventListener("click", async () => {
+  const displayName = $("joinName").value.trim();
+
+  if (!displayName) {
+    alert("اكتب اسمك أولاً.");
+    return;
+  }
+
+  const button = $("joinRoomBtn");
+  button.disabled = true;
+  button.textContent = "جاري إرسال الطلب...";
+
+  try {
+    const data = await post("/api/rooms/join", {
+      inviteCode,
+      displayName
+    });
+
+    room = {
+      roomId: data.roomId,
+      accessToken: data.accessToken,
+      memberId: data.memberId,
+      role: "member",
+      displayName
+    };
+
+    pendingJoin = true;
+    saveRoom();
+
+    $("joinStatus").textContent =
+      "تم إرسال طلبك. انتظر موافقة صاحب الغرفة.";
+
+    button.textContent = "تم إرسال الطلب";
+
+    history.replaceState({}, "", location.pathname);
+
+    await activateRoom();
+
+  } catch (error) {
+    alert(error.message);
+    button.disabled = false;
+    button.textContent = "إرسال طلب الانضمام";
+  }
+});
+
+// ===================================
+// تشغيل الغرفة
+// ===================================
+
+async function activateRoom() {
+  if (!room) return;
+
+  clearInterval(roomPolling);
+  clearInterval(requestPolling);
+
+  if (room.role === "owner") {
+    renderRoomInfo("غرفتك الخاصة · أنت صاحب الغرفة");
+    hideModal("createRoomModal");
+  } else {
+    renderRoomInfo(
+      pendingJoin
+        ? "طلب الانضمام قيد الانتظار..."
+        : "غرفة مشتركة مع صديقك"
+    );
+  }
+
+  clearMessages();
+
+  if (room.role === "owner") {
+    addMessage(
+      "تم إنشاء الغرفة. أرسل رابط الدعوة لصديقك، وسيظهر طلبه هنا.",
+      "assistant"
+    );
+  }
+
+  await loadRoomMessages();
+
+  roomPolling = setInterval(loadRoomMessages, 3000);
+
+  if (room.role === "owner") {
+    await loadRequests();
+    requestPolling = setInterval(loadRequests, 6000);
+  }
+}
+
+// ===================================
+// تحميل رسائل الغرفة
+// ===================================
+
+async function loadRoomMessages() {
+  if (!room) return;
+
+  try {
+    const query = new URLSearchParams({
+      roomId: room.roomId,
+      accessToken: room.accessToken
+    });
+
+    const data = await api(
+      "/api/rooms/messages?" + query.toString()
+    );
+
+    if (pendingJoin) {
+      pendingJoin = false;
+      renderRoomInfo("تم قبولك! أنت الآن داخل المحادثة المشتركة ❤️");
+      hideModal("joinRoomModal");
+      clearMessages();
+    }
+
+    for (const item of data.messages || []) {
+      addRoomMessage(item);
+    }
+
+  } catch (error) {
+    if (pendingJoin) {
+      $("joinStatus").textContent =
+        "بانتظار موافقة صاحب الغرفة...";
+      return;
+    }
+
+    console.error("تعذر تحميل رسائل الغرفة:", error);
+  }
+}
+
+// ===================================
+// طلبات الانضمام
+// ===================================
+
+$("requestsBtn").addEventListener("click", async () => {
+  if (!room || room.role !== "owner") {
+    alert("طلبات الانضمام تظهر لصاحب الغرفة فقط.");
+    return;
+  }
+
+  showModal("requestsModal");
+  await loadRequests();
+});
+
+async function loadRequests() {
+  if (!room || room.role !== "owner") return;
+
+  try {
+    const data = await post("/api/rooms/requests", {
+      roomId: room.roomId,
+      accessToken: room.accessToken
+    });
+
+    const list = $("requestsList");
+    const badge = $("requestBadge");
+
+    list.replaceChildren();
+
+    const requests = data.requests || [];
+
+    badge.hidden = requests.length === 0;
+    badge.textContent = requests.length;
+
+    if (!requests.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "لا توجد طلبات حالياً.";
+      list.appendChild(empty);
+      return;
+    }
+
+    requests.forEach(request => {
+      const row = document.createElement("div");
+      row.className = "request-item";
+
+      const name = document.createElement("strong");
+      name.textContent = request.display_name;
+
+      const actions = document.createElement("div");
+      actions.className = "request-actions";
+
+      const accept = document.createElement("button");
+      accept.textContent = "قبول";
+      accept.className = "accept-btn";
+
+      accept.addEventListener("click", () => {
+        decideRequest(request.id, "approved");
+      });
+
+      const reject = document.createElement("button");
+      reject.textContent = "رفض";
+      reject.className = "reject-btn";
+
+      reject.addEventListener("click", () => {
+        decideRequest(request.id, "rejected");
+      });
+
+      actions.append(accept, reject);
+      row.append(name, actions);
+      list.appendChild(row);
+    });
+
+  } catch (error) {
+    console.error("طلبات الانضمام:", error);
+  }
+}
+
+async function decideRequest(memberId, decision) {
+  try {
+    await post("/api/rooms/requests/decision", {
+      roomId: room.roomId,
+      accessToken: room.accessToken,
+      memberId,
+      decision
+    });
+
+    await loadRequests();
+
+    alert(
+      decision === "approved"
+        ? "تم قبول طلب الانضمام."
+        : "تم رفض طلب الانضمام."
+    );
+
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+// ===================================
+// إرسال الرسائل
+// ===================================
 
 $("chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -23,20 +437,39 @@ $("chatForm").addEventListener("submit", async (e) => {
   const value = $("prompt").value.trim();
   if (!value) return;
 
-  addMessage(value, "user");
   $("prompt").value = "";
 
+  if (room && pendingJoin) {
+    alert("انتظر موافقة صاحب الغرفة أولاً.");
+    return;
+  }
+
+  if (room) {
+    try {
+      await post("/api/rooms/messages", {
+        roomId: room.roomId,
+        accessToken: room.accessToken,
+        content: value
+      });
+
+      await loadRoomMessages();
+
+    } catch (error) {
+      addMessage("تعذر إرسال الرسالة: " + error.message, "assistant");
+    }
+
+    return;
+  }
+
+  addMessage(value, "user");
+
   try {
-    const response = await fetch(`${API}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: value })
+    const data = await post("/api/chat", {
+      message: value
     });
 
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-
     lastReply = data.reply || "ما وصلني رد واضح.";
+
   } catch (error) {
     lastReply = "سبب المشكلة: " + error.message;
   }
@@ -121,7 +554,11 @@ function urlBase64ToUint8Array(base64String) {
     .replace(/_/g, "/");
 
   const raw = atob(base64);
-  return Uint8Array.from(raw, char => char.charCodeAt(0));
+
+  return Uint8Array.from(
+    raw,
+    char => char.charCodeAt(0)
+  );
 }
 
 // ===================================
@@ -157,14 +594,10 @@ $("notifyBtn").addEventListener("click", async () => {
 
     const registration = await navigator.serviceWorker.ready;
 
-    const keyResponse = await fetch(`${API}/api/push/public-key`);
-    const keyData = await keyResponse.json();
+    const keyData = await api("/api/push/public-key");
 
-    if (!keyResponse.ok || !keyData.publicKey) {
-      throw new Error("تعذر الحصول على مفتاح الإشعارات.");
-    }
-
-    let subscription = await registration.pushManager.getSubscription();
+    let subscription =
+      await registration.pushManager.getSubscription();
 
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
@@ -173,17 +606,7 @@ $("notifyBtn").addEventListener("click", async () => {
       });
     }
 
-    const saveResponse = await fetch(`${API}/api/push/subscribe`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription })
-    });
-
-    const saveData = await saveResponse.json();
-
-    if (!saveResponse.ok) {
-      throw new Error(saveData.error || "تعذر حفظ الاشتراك.");
-    }
+    await post("/api/push/subscribe", { subscription });
 
     alert("تم تفعيل الإشعارات بنجاح ❤️");
 
@@ -192,102 +615,6 @@ $("notifyBtn").addEventListener("click", async () => {
     alert("تعذر تفعيل الإشعارات: " + error.message);
   }
 });
-
-// ===================================
-// التذكيرات
-// ===================================
-
-const STORAGE = "mohamed-ai-reminders-v1";
-let reminders = JSON.parse(localStorage.getItem(STORAGE) || "[]");
-
-function saveReminders() {
-  localStorage.setItem(STORAGE, JSON.stringify(reminders));
-  renderReminders();
-}
-
-function renderReminders() {
-  const root = $("reminderList");
-  root.replaceChildren();
-
-  reminders.sort((a, b) => new Date(a.time) - new Date(b.time));
-
-  reminders.forEach(item => {
-    const row = document.createElement("div");
-    row.className = "reminder";
-
-    const info = document.createElement("div");
-    info.textContent = item.text;
-
-    const date = document.createElement("small");
-    date.textContent = new Date(item.time).toLocaleString("ar-SA");
-
-    info.appendChild(date);
-
-    const del = document.createElement("button");
-    del.className = "remove";
-    del.textContent = "×";
-    del.setAttribute("aria-label", "حذف التذكير");
-
-    del.onclick = () => {
-      reminders = reminders.filter(x => x.id !== item.id);
-      saveReminders();
-    };
-
-    row.append(info, del);
-    root.appendChild(row);
-  });
-}
-
-$("reminderForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-
-  const text = $("reminderText").value.trim();
-  const time = $("reminderTime").value;
-
-  if (!text || !time) return;
-
-  reminders.push({
-    id: crypto.randomUUID(),
-    text,
-    time,
-    notified: false
-  });
-
-  $("reminderText").value = "";
-  saveReminders();
-});
-
-async function checkReminders() {
-  const now = Date.now();
-  let changed = false;
-
-  for (const item of reminders) {
-    if (!item.notified && new Date(item.time).getTime() <= now) {
-      item.notified = true;
-      changed = true;
-
-      if (
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        const registration = await navigator.serviceWorker.ready;
-
-        registration.showNotification("تذكير من العطاوي", {
-          body: item.text,
-          icon: "./icon.svg"
-        });
-      } else {
-        alert("تذكير: " + item.text);
-      }
-    }
-  }
-
-  if (changed) saveReminders();
-}
-
-renderReminders();
-setInterval(checkReminders, 15000);
-checkReminders();
 
 // ===================================
 // Service Worker
@@ -300,7 +627,7 @@ if ("serviceWorker" in navigator) {
 }
 
 // ===================================
-// مكالمة العطاوي - نظام استماع جديد
+// المكالمة الصوتية
 // ===================================
 
 let voiceCallActive = false;
@@ -315,19 +642,13 @@ let listenTimeout = null;
 let callSession = 0;
 
 function updateCallButtons(active) {
-  const screen = $("callScreen");
-  const app = $("mainApp");
-
-  if (screen) screen.hidden = !active;
-  if (app) app.hidden = active;
-
+  $("callScreen").hidden = !active;
+  $("mainApp").hidden = active;
   document.body.classList.toggle("in-call", active);
 }
 
 function setCallSubtitle(text) {
-  if ($("callSubtitle")) {
-    $("callSubtitle").textContent = text;
-  }
+  $("callSubtitle").textContent = text;
 }
 
 function updateCallTimer() {
@@ -337,33 +658,18 @@ function updateCallTimer() {
   const minutes = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const seconds = String(elapsed % 60).padStart(2, "0");
 
-  if ($("callTimer")) {
-    $("callTimer").textContent = `${minutes}:${seconds}`;
-  }
+  $("callTimer").textContent = `${minutes}:${seconds}`;
 }
-
-// ===================================
-// كتم وإلغاء كتم المايك
-// ===================================
 
 function setMuted(muted) {
   callMuted = muted;
 
-  if ($("muteIcon")) {
-    $("muteIcon").textContent = muted ? "🔇" : "🎙️";
-  }
-
-  if ($("muteText")) {
-    $("muteText").textContent = muted ? "إلغاء الكتم" : "كتم الصوت";
-  }
-
-  if ($("muteCallBtn")) {
-    $("muteCallBtn").classList.toggle("muted", muted);
-  }
+  $("muteIcon").textContent = muted ? "🔇" : "🎙️";
+  $("muteText").textContent = muted ? "إلغاء الكتم" : "كتم الصوت";
+  $("muteCallBtn").classList.toggle("muted", muted);
 
   if (muted) {
     setCallSubtitle("الميكروفون مكتوم");
-
     clearTimeout(listenTimeout);
 
     if (voiceRecognition) {
@@ -381,10 +687,6 @@ function setMuted(muted) {
     startListeningAgain();
   }
 }
-
-// ===================================
-// بدء المكالمة
-// ===================================
 
 function startAlAtawiCall() {
   const Recognition =
@@ -408,7 +710,6 @@ function startAlAtawiCall() {
   voiceBusy = false;
   voiceStarting = false;
   callMuted = false;
-
   callStartedAt = Date.now();
 
   updateCallTimer();
@@ -416,22 +717,16 @@ function startAlAtawiCall() {
   clearInterval(callTimerInterval);
   callTimerInterval = setInterval(updateCallTimer, 1000);
 
-  if ($("callStatus")) {
-    $("callStatus").textContent = "متصل";
-  }
+  $("callStatus").textContent = "متصل";
 
   updateCallButtons(true);
   setCallSubtitle("يسمعك الآن...");
 
-  if ($("muteIcon")) $("muteIcon").textContent = "🎙️";
-  if ($("muteText")) $("muteText").textContent = "كتم الصوت";
+  $("muteIcon").textContent = "🎙️";
+  $("muteText").textContent = "كتم الصوت";
 
   startListeningAgain();
 }
-
-// ===================================
-// إنشاء جلسة استماع جديدة لكل جملة
-// ===================================
 
 function startListeningAgain() {
   if (
@@ -439,9 +734,7 @@ function startListeningAgain() {
     voiceBusy ||
     voiceStarting ||
     callMuted
-  ) {
-    return;
-  }
+  ) return;
 
   clearTimeout(listenTimeout);
 
@@ -453,9 +746,7 @@ function startListeningAgain() {
 
   voiceStarting = true;
 
-  // إنشاء كائن جديد بدلاً من إعادة استخدام الجلسة القديمة
   const recognition = new Recognition();
-
   voiceRecognition = recognition;
 
   recognition.lang = "ar-SA";
@@ -492,7 +783,6 @@ function startListeningAgain() {
     voiceBusy = true;
     setCallSubtitle("لحظة، أفكر...");
 
-    // إيقاف جلسة الاستماع الحالية
     try {
       recognition.stop();
     } catch (error) {
@@ -504,23 +794,29 @@ function startListeningAgain() {
     const thisSession = callSession;
 
     try {
-      const response = await fetch(`${API}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message })
-      });
+      let data;
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "فشل الاتصال بالخادم.");
+      if (room && !pendingJoin) {
+        data = await post("/api/rooms/messages", {
+          roomId: room.roomId,
+          accessToken: room.accessToken,
+          content: message
+        });
+      } else if (room && pendingJoin) {
+        throw new Error("انتظر موافقة صاحب الغرفة.");
+      } else {
+        data = await post("/api/chat", { message });
       }
 
       if (!voiceCallActive || thisSession !== callSession) return;
 
       lastReply = data.reply || "ما قدرت أجهز الرد.";
 
-      addMessage(lastReply, "assistant");
+      if (room) {
+        await loadRoomMessages();
+      } else {
+        addMessage(lastReply, "assistant");
+      }
 
       if (callMuted) {
         voiceBusy = false;
@@ -528,16 +824,10 @@ function startListeningAgain() {
       }
 
       setCallSubtitle("العطاوي يتحدث...");
+      $("avatarRing").classList.add("speaking");
 
-      if ($("avatarRing")) {
-        $("avatarRing").classList.add("speaking");
-      }
-
-      // تشغيل صوت الرد ثم إعادة الاستماع
       speakText(lastReply, () => {
-        if ($("avatarRing")) {
-          $("avatarRing").classList.remove("speaking");
-        }
+        $("avatarRing").classList.remove("speaking");
 
         if (!voiceCallActive || thisSession !== callSession) return;
 
@@ -555,7 +845,6 @@ function startListeningAgain() {
       if (!voiceCallActive || thisSession !== callSession) return;
 
       voiceBusy = false;
-
       addMessage("تعذر الاتصال بالعطاوي: " + error.message, "assistant");
 
       if (!callMuted) {
@@ -567,7 +856,6 @@ function startListeningAgain() {
 
   recognition.onerror = (event) => {
     console.error("خطأ التعرف الصوتي:", event.error);
-
     voiceStarting = false;
 
     if (
@@ -597,7 +885,6 @@ function startListeningAgain() {
   recognition.onend = () => {
     voiceStarting = false;
 
-    // إذا لم تصل جملة، نبدأ جلسة جديدة
     if (
       !receivedResult &&
       voiceCallActive &&
@@ -613,14 +900,9 @@ function startListeningAgain() {
   } catch (error) {
     voiceStarting = false;
     console.error("تعذر بدء الاستماع:", error);
-
     scheduleListening(1500);
   }
 }
-
-// ===================================
-// إعادة الاستماع بتوقيت منظم
-// ===================================
 
 function scheduleListening(delay = 800) {
   clearTimeout(listenTimeout);
@@ -638,10 +920,6 @@ function scheduleListening(delay = 800) {
     }
   }, delay);
 }
-
-// ===================================
-// إنهاء المكالمة
-// ===================================
 
 function stopAlAtawiCall() {
   callSession++;
@@ -662,59 +940,42 @@ function stopAlAtawiCall() {
   }
 
   if (voiceRecognition) {
-    const oldRecognition = voiceRecognition;
+    const old = voiceRecognition;
     voiceRecognition = null;
 
-    oldRecognition.onend = null;
-    oldRecognition.onerror = null;
-    oldRecognition.onresult = null;
-    oldRecognition.onstart = null;
+    old.onend = null;
+    old.onerror = null;
+    old.onresult = null;
+    old.onstart = null;
 
     try {
-      oldRecognition.abort();
+      old.abort();
     } catch (error) {
       console.log(error);
     }
   }
 
-  if ($("callTimer")) {
-    $("callTimer").textContent = "00:00";
-  }
-
-  if ($("avatarRing")) {
-    $("avatarRing").classList.remove("speaking");
-  }
-
-  if ($("muteIcon")) $("muteIcon").textContent = "🎙️";
-  if ($("muteText")) $("muteText").textContent = "كتم الصوت";
-
-  if ($("muteCallBtn")) {
-    $("muteCallBtn").classList.remove("muted");
-  }
-
-  if ($("callStatus")) {
-    $("callStatus").textContent = "انتهت المكالمة";
-  }
+  $("callTimer").textContent = "00:00";
+  $("avatarRing").classList.remove("speaking");
+  $("muteIcon").textContent = "🎙️";
+  $("muteText").textContent = "كتم الصوت";
+  $("muteCallBtn").classList.remove("muted");
+  $("callStatus").textContent = "انتهت المكالمة";
 
   updateCallButtons(false);
-
-  console.log("انتهت مكالمة العطاوي.");
 }
+
+$("voiceCallBtn").addEventListener("click", startAlAtawiCall);
+$("endCallBtn").addEventListener("click", stopAlAtawiCall);
+
+$("muteCallBtn").addEventListener("click", () => {
+  setMuted(!callMuted);
+});
 
 // ===================================
-// ربط أزرار المكالمة
+// استعادة الغرفة عند فتح التطبيق
 // ===================================
 
-if ($("voiceCallBtn")) {
-  $("voiceCallBtn").addEventListener("click", startAlAtawiCall);
-}
-
-if ($("endCallBtn")) {
-  $("endCallBtn").addEventListener("click", stopAlAtawiCall);
-}
-
-if ($("muteCallBtn")) {
-  $("muteCallBtn").addEventListener("click", () => {
-    setMuted(!callMuted);
-  });
+if (room?.roomId && room?.accessToken) {
+  activateRoom();
 }
