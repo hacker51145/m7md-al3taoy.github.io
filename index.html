@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -8,12 +9,18 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
-  <title>MOHAMED AI</title>
+  <title>العطاوي</title>
 </head>
 <body>
-  <main class="app">
+  <main class="app" id="mainApp">
     <header class="top">
-      <div class="brand"><div class="logo">M</div><div><h1>العطاوي</h1><p>مساعدك الشخصي</p></div></div>
+      <div class="brand">
+        <div class="logo">M</div>
+        <div>
+          <h1>العطاوي</h1>
+          <p>مساعدك الشخصي</p>
+        </div>
+      </div>
       <span class="status"><i></i> جاهز</span>
     </header>
 
@@ -25,32 +32,79 @@
 
     <section class="chat" aria-label="المحادثة">
       <div id="messages" class="messages">
-        <div class="msg assistant">ارحبووو يارجال معك العطاوي من صنع محمد العطاوي وش بغيت؟.</div>
+        <div class="msg assistant">
+          ارحبووو يارجال معك العطاوي من صنع محمد العطاوي وش بغيت؟
+        </div>
       </div>
+
       <form id="chatForm" class="composer">
         <input id="prompt" autocomplete="off" placeholder="اكتب رسالتك هنا..." aria-label="رسالتك">
         <button class="send" type="submit" aria-label="إرسال">➤</button>
       </form>
-     <div class="tools">
-  <button id="micBtn" class="tool">🎙️ تحدث</button>
-  <button id="speakBtn" class="tool">🔊 قراءة الرد</button>
-  <button id="voiceCallBtn" class="tool">📞 ابدأ مكالمة العطاوي</button>
-  <button id="endCallBtn" class="tool" style="display:none">❌ إنهاء المكالمة</button>
-  <button id="notifyBtn" class="tool">🔔 تفعيل الإشعارات</button>
-</div>
+
+      <div class="tools">
+        <button id="micBtn" class="tool">🎙️ تحدث</button>
+        <button id="speakBtn" class="tool">🔊 قراءة الرد</button>
+        <button id="voiceCallBtn" class="tool">📞 اتصل على العطاوي</button>
+        <button id="notifyBtn" class="tool">🔔 تفعيل الإشعارات</button>
+      </div>
+    </section>
 
     <section class="reminders">
-      <div class="section-head"><h3>تذكير جديد</h3><span>📌</span></div>
+      <div class="section-head">
+        <h3>تذكير جديد</h3>
+        <span>📌</span>
+      </div>
+
       <form id="reminderForm" class="reminder-form">
         <input id="reminderText" placeholder="مثلاً: ذكرني أذاكر" required>
         <input id="reminderTime" type="datetime-local" required>
         <button type="submit">إضافة</button>
       </form>
+
       <div id="reminderList" class="reminder-list"></div>
-      <p class="hint">ملاحظة: التذكيرات في هذه النسخة محفوظة على جهازك، وقد تحتاج فتح التطبيق وقت التذكير. الإشعارات تعتمد على دعم المتصفح وأذوناته.</p>
+      <p class="hint">
+        التذكيرات محفوظة على جهازك وقد تحتاج فتح التطبيق وقت التذكير.
+      </p>
     </section>
-    <footer>MOHAMED AI · النسخة الأولية</footer>
+
+    <footer>العطاوي · النسخة الأولية</footer>
   </main>
+
+  <!-- واجهة المكالمة -->
+  <section id="callScreen" class="call-screen" hidden>
+    <div class="call-top">
+      <span>مكالمة صوتية</span>
+      <span class="call-live">
+        <i></i> <span id="callStatus">متصل</span>
+      </span>
+    </div>
+
+    <div class="call-center">
+      <div class="avatar-ring" id="avatarRing">
+        <div class="avatar">
+          <span>ع</span>
+        </div>
+      </div>
+
+      <h2>العطاوي</h2>
+      <p id="callSubtitle">يسمعك الآن...</p>
+      <p id="callTimer">00:00</p>
+    </div>
+
+    <div class="call-controls">
+      <button id="muteCallBtn" class="call-control mute-control">
+        <span id="muteIcon">🎙️</span>
+        <span id="muteText">كتم الصوت</span>
+      </button>
+
+      <button id="endCallBtn" class="call-control end-control">
+        <span>📞</span>
+        <span>إنهاء المكالمة</span>
+      </button>
+    </div>
+  </section>
+
   <script src="app.js"></script>
 </body>
 </html>
