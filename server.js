@@ -1,6 +1,7 @@
 
 const http = require("node:http");
 const webpush = require("web-push");
+const crypto = require("node:crypto");
 
 const PORT = process.env.PORT || 10000;
 const API_KEY = process.env.GEMINI_API_KEY;
@@ -13,11 +14,11 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT;
 
-const PRIMARY_MODEL =
-  process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite";
 
-const FALLBACK_MODEL =
-  process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite";
+const SYSTEM_PROMPT =
+  "أنت العطاوي (MOHAMED AI)، مساعد شخصي ودود يتحدث بالعربية باللهجة السعودية بشكل طبيعي ومختصر. كن مفيداً وواضحاً. إذا سألك أي شخص: من صنعك؟ أو من مطورك؟ أو من برمجك؟ فأجب بهذه العبارة حرفياً: أنا العطاوي، صنعني محمد العطاوي عشان أخدمكم. لا تقل إن Google أو Gemini صنعك؛ محمد العطاوي هو صانع العطاوي، أما Google أو Gemini فهي تقنيات تشغيل فقط وليست صانعك. لا تستخدم عبارة التعريف هذه إلا عندما يكون السؤال عن صانعك أو مطورك.";
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_SUBJECT) {
   webpush.setVapidDetails(
@@ -34,7 +35,6 @@ function send(res, status, data) {
     "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
     "Access-Control-Allow-Headers": "Content-Type"
   });
-
   res.end(JSON.stringify(data));
 }
 
@@ -44,7 +44,6 @@ function readBody(req) {
 
     req.on("data", chunk => {
       raw += chunk;
-
       if (raw.length > 20000) {
         reject(new Error("Request too large"));
         req.destroy();
@@ -63,24 +62,29 @@ function readBody(req) {
   });
 }
 
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function newToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 // Supabase
 async function supabase(path, options = {}) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     throw new Error("Supabase is not configured");
   }
 
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/${path}`,
-    {
-      ...options,
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        ...options.headers
-      }
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      ...options.headers
     }
-  );
+  });
 
   const result = await response.text();
 
@@ -89,9 +93,7 @@ async function supabase(path, options = {}) {
     throw new Error("Supabase request failed");
   }
 
-  if (!result.trim()) {
-    return null;
-  }
+  if (!result.trim()) return null;
 
   try {
     return JSON.parse(result);
@@ -100,8 +102,50 @@ async function supabase(path, options = {}) {
   }
 }
 
+async function getMember(roomId, token) {
+  if (!roomId || !token) return null;
+
+  const hash = hashToken(String(token));
+  const rows = await supabase(
+    `room_members?room_id=eq.${encodeURIComponent(roomId)}&access_token_hash=eq.${hash}&select=id,room_id,display_name,role,status`
+  );
+
+  return rows?.[0] || null;
+}
+
+async function requireApprovedMember(roomId, token) {
+  const member = await getMember(roomId, token);
+
+  if (!member || member.status !== "approved") {
+    return null;
+  }
+
+  return member;
+}
+
+async function requireOwner(roomId, token) {
+  const member = await requireApprovedMember(roomId, token);
+
+  if (!member || member.role !== "owner") {
+    return null;
+  }
+
+  return member;
+}
+
 // Gemini
-async function askGemini(model, message) {
+async function askGemini(model, message, history = []) {
+  const contents = [
+    ...history.map(item => ({
+      role: item.sender_type === "assistant" ? "model" : "user",
+      parts: [{ text: `${item.sender_name}: ${item.content}` }]
+    })),
+    {
+      role: "user",
+      parts: [{ text: message }]
+    }
+  ];
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -112,14 +156,9 @@ async function askGemini(model, message) {
       },
       body: JSON.stringify({
         system_instruction: {
-          parts: [{
-            text: "أنت العطاوي (MOHAMED AI)، مساعد شخصي ودود يتحدث بالعربية باللهجة السعودية بشكل طبيعي ومختصر. كن مفيداً وواضحاً. إذا سألك أي شخص: من صنعك؟ أو من مطورك؟ أو من برمجك؟ فأجب بهذه العبارة حرفياً: أنا العطاوي، صنعني محمد العطاوي عشان أخدمكم. لا تقل إن Google أو Gemini صنعك؛ محمد العطاوي هو صانع العطاوي، أما Google أو Gemini فهي تقنيات تشغيل فقط وليست صانعك. لا تستخدم عبارة التعريف هذه إلا عندما يكون السؤال عن صانعك أو مطورك."
-          }]
+          parts: [{ text: SYSTEM_PROMPT }]
         },
-        contents: [{
-          role: "user",
-          parts: [{ text: message }]
-        }],
+        contents,
         generationConfig: {
           maxOutputTokens: 700
         }
@@ -131,9 +170,7 @@ async function askGemini(model, message) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(
-      data.error?.message || "Gemini API error"
-    );
+    throw new Error(data.error?.message || "Gemini API error");
   }
 
   const reply = data.candidates?.[0]?.content?.parts
@@ -141,19 +178,36 @@ async function askGemini(model, message) {
     .join("")
     .trim();
 
-  if (!reply) {
-    throw new Error("Empty Gemini response");
-  }
+  if (!reply) throw new Error("Empty Gemini response");
 
   return reply;
 }
 
+async function getGeminiReply(message, history = []) {
+  try {
+    return {
+      reply: await askGemini(PRIMARY_MODEL, message, history),
+      model: PRIMARY_MODEL
+    };
+  } catch (error) {
+    console.log("Primary model failed:", error.message);
+  }
+
+  try {
+    return {
+      reply: await askGemini(FALLBACK_MODEL, message, history),
+      model: FALLBACK_MODEL
+    };
+  } catch (error) {
+    console.error("Fallback model failed:", error.message);
+    throw new Error("النموذجان مشغولان حالياً. حاول بعد قليل.");
+  }
+}
+
 // Server
 const server = http.createServer(async (req, res) => {
-  const pathname = new URL(
-    req.url,
-    "http://localhost"
-  ).pathname;
+  const url = new URL(req.url, "http://localhost");
+  const pathname = url.pathname;
 
   console.log("REQUEST:", req.method, pathname);
 
@@ -163,7 +217,6 @@ const server = http.createServer(async (req, res) => {
       "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
       "Access-Control-Allow-Headers": "Content-Type"
     });
-
     return res.end();
   }
 
@@ -179,30 +232,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     // المفتاح العام للإشعارات
-    if (
-      req.method === "GET" &&
-      pathname === "/api/push/public-key"
-    ) {
+    if (req.method === "GET" && pathname === "/api/push/public-key") {
       if (!VAPID_PUBLIC_KEY) {
-        return send(res, 500, {
-          error: "VAPID public key is missing"
-        });
+        return send(res, 500, { error: "VAPID public key is missing" });
       }
-
-      return send(res, 200, {
-        publicKey: VAPID_PUBLIC_KEY
-      });
+      return send(res, 200, { publicKey: VAPID_PUBLIC_KEY });
     }
 
     // تسجيل اشتراك الإشعارات
-    if (
-      req.method === "POST" &&
-      pathname === "/api/push/subscribe"
-    ) {
+    if (req.method === "POST" && pathname === "/api/push/subscribe") {
       if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-        return send(res, 500, {
-          error: "VAPID is not configured"
-        });
+        return send(res, 500, { error: "VAPID is not configured" });
       }
 
       const body = await readBody(req);
@@ -211,106 +251,279 @@ const server = http.createServer(async (req, res) => {
       if (
         !sub ||
         !sub.endpoint ||
-        !sub.keys ||
-        !sub.keys.p256dh ||
-        !sub.keys.auth ||
+        !sub.keys?.p256dh ||
+        !sub.keys?.auth ||
         !sub.endpoint.startsWith("https://")
       ) {
-        return send(res, 400, {
-          error: "Invalid subscription"
-        });
+        return send(res, 400, { error: "Invalid subscription" });
+      }
+
+      await supabase("push_subscriptions?on_conflict=endpoint", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates" },
+        body: JSON.stringify({
+          endpoint: sub.endpoint,
+          subscription: sub
+        })
+      });
+
+      return send(res, 200, { ok: true, message: "Subscription saved" });
+    }
+
+    // إنشاء غرفة جديدة وتعيين صاحبها
+    if (req.method === "POST" && pathname === "/api/rooms/create") {
+      const body = await readBody(req);
+      const ownerName = String(body.ownerName || "").trim();
+
+      if (!ownerName || ownerName.length > 40) {
+        return send(res, 400, { error: "اكتب اسمك بشكل صحيح." });
+      }
+
+      const inviteCode = crypto.randomBytes(18).toString("hex");
+      const accessToken = newToken();
+
+      const rooms = await supabase("chat_rooms", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ invite_code: inviteCode })
+      });
+
+      const room = rooms?.[0];
+      if (!room) throw new Error("Room creation failed");
+
+      const members = await supabase("room_members", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: room.id,
+          display_name: ownerName,
+          access_token_hash: hashToken(accessToken),
+          role: "owner",
+          status: "approved"
+        })
+      });
+
+      const owner = members?.[0];
+      if (!owner) throw new Error("Owner creation failed");
+
+      await supabase(`chat_rooms?id=eq.${room.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ owner_member_id: owner.id })
+      });
+
+      return send(res, 201, {
+        ok: true,
+        roomId: room.id,
+        inviteCode,
+        accessToken,
+        memberId: owner.id,
+        role: "owner"
+      });
+    }
+
+    // طلب انضمام صديق
+    if (req.method === "POST" && pathname === "/api/rooms/join") {
+      const body = await readBody(req);
+      const inviteCode = String(body.inviteCode || "").trim();
+      const displayName = String(body.displayName || "").trim();
+
+      if (!inviteCode || !displayName || displayName.length > 40) {
+        return send(res, 400, { error: "تأكد من رابط الدعوة واسمك." });
+      }
+
+      const rooms = await supabase(
+        `chat_rooms?invite_code=eq.${encodeURIComponent(inviteCode)}&select=id`
+      );
+
+      const room = rooms?.[0];
+      if (!room) return send(res, 404, { error: "رابط الدعوة غير صحيح." });
+
+      const accessToken = newToken();
+
+      const members = await supabase("room_members", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: room.id,
+          display_name: displayName,
+          access_token_hash: hashToken(accessToken),
+          role: "member",
+          status: "pending"
+        })
+      });
+
+      const member = members?.[0];
+
+      return send(res, 201, {
+        ok: true,
+        status: "pending",
+        message: "تم إرسال طلب الانضمام، انتظر موافقة صاحب الغرفة.",
+        roomId: room.id,
+        memberId: member?.id,
+        accessToken
+      });
+    }
+
+    // عرض طلبات الانضمام للمالك
+    if (req.method === "POST" && pathname === "/api/rooms/requests") {
+      const body = await readBody(req);
+      const owner = await requireOwner(body.roomId, body.accessToken);
+
+      if (!owner) {
+        return send(res, 403, { error: "هذه الصلاحية لصاحب الغرفة فقط." });
+      }
+
+      const requests = await supabase(
+        `room_members?room_id=eq.${encodeURIComponent(body.roomId)}&status=eq.pending&select=id,display_name,created_at&order=created_at.asc`
+      );
+
+      return send(res, 200, { ok: true, requests: requests || [] });
+    }
+
+    // قبول أو رفض طلب انضمام
+    if (req.method === "POST" && pathname === "/api/rooms/requests/decision") {
+      const body = await readBody(req);
+      const owner = await requireOwner(body.roomId, body.accessToken);
+
+      if (!owner) {
+        return send(res, 403, { error: "هذه الصلاحية لصاحب الغرفة فقط." });
+      }
+
+      if (!["approved", "rejected"].includes(body.decision)) {
+        return send(res, 400, { error: "قرار غير صحيح." });
+      }
+
+      const target = await supabase(
+        `room_members?id=eq.${encodeURIComponent(body.memberId)}&room_id=eq.${encodeURIComponent(body.roomId)}&status=eq.pending&select=id`
+      );
+
+      if (!target?.length) {
+        return send(res, 404, { error: "طلب الانضمام غير موجود." });
       }
 
       await supabase(
-        "push_subscriptions?on_conflict=endpoint",
+        `room_members?id=eq.${encodeURIComponent(body.memberId)}&room_id=eq.${encodeURIComponent(body.roomId)}&status=eq.pending`,
         {
-          method: "POST",
-          headers: {
-            Prefer: "resolution=merge-duplicates"
-          },
-          body: JSON.stringify({
-            endpoint: sub.endpoint,
-            subscription: sub
-          })
+          method: "PATCH",
+          body: JSON.stringify({ status: body.decision })
         }
       );
 
       return send(res, 200, {
         ok: true,
-        message: "Subscription saved"
+        status: body.decision
       });
     }
 
-    // المحادثة مع Gemini
-    if (
-      req.method === "POST" &&
-      pathname === "/api/chat"
-    ) {
+    // جلب رسائل الغرفة
+    if (req.method === "GET" && pathname === "/api/rooms/messages") {
+      const roomId = url.searchParams.get("roomId");
+      const accessToken = url.searchParams.get("accessToken");
+
+      const member = await requireApprovedMember(roomId, accessToken);
+
+      if (!member) {
+        return send(res, 403, { error: "انتظر موافقة صاحب الغرفة أولاً." });
+      }
+
+      const messages = await supabase(
+        `chat_messages?room_id=eq.${encodeURIComponent(roomId)}&select=id,member_id,sender_name,sender_type,content,created_at&order=id.asc&limit=100`
+      );
+
+      return send(res, 200, { ok: true, messages: messages || [] });
+    }
+
+    // إرسال رسالة داخل الغرفة ورد العطاوي عليها
+    if (req.method === "POST" && pathname === "/api/rooms/messages") {
+      const body = await readBody(req);
+      const roomId = body.roomId;
+      const member = await requireApprovedMember(roomId, body.accessToken);
+
+      if (!member) {
+        return send(res, 403, { error: "انتظر موافقة صاحب الغرفة أولاً." });
+      }
+
+      const content = String(body.content || "").trim();
+
+      if (!content) {
+        return send(res, 400, { error: "اكتب رسالتك أولاً." });
+      }
+
+      if (content.length > 4000) {
+        return send(res, 400, { error: "الرسالة طويلة جداً." });
+      }
+
+      const inserted = await supabase("chat_messages", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: roomId,
+          member_id: member.id,
+          sender_name: member.display_name,
+          sender_type: "user",
+          content
+        })
+      });
+
+      const history = await supabase(
+        `chat_messages?room_id=eq.${encodeURIComponent(roomId)}&select=sender_name,sender_type,content&order=id.desc&limit=20`
+      );
+
+      const chronologicalHistory = (history || [])
+        .reverse()
+        .slice(0, -1);
+
+      const result = await getGeminiReply(content, chronologicalHistory);
+
+      const botRows = await supabase("chat_messages", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: roomId,
+          member_id: null,
+          sender_name: "العطاوي",
+          sender_type: "assistant",
+          content: result.reply
+        })
+      });
+
+      return send(res, 200, {
+        ok: true,
+        userMessage: inserted?.[0] || null,
+        assistantMessage: botRows?.[0] || null,
+        reply: result.reply,
+        model: result.model
+      });
+    }
+
+    // المحادثة القديمة مع Gemini - تبقى شغالة
+    if (req.method === "POST" && pathname === "/api/chat") {
       if (!API_KEY) {
-        return send(res, 500, {
-          error: "Gemini API key missing"
-        });
+        return send(res, 500, { error: "Gemini API key missing" });
       }
 
       const body = await readBody(req);
       const message = String(body.message || "").trim();
 
       if (!message) {
-        return send(res, 400, {
-          error: "اكتب رسالتك أولاً."
-        });
+        return send(res, 400, { error: "اكتب رسالتك أولاً." });
       }
 
       if (message.length > 4000) {
-        return send(res, 400, {
-          error: "الرسالة طويلة جداً."
-        });
+        return send(res, 400, { error: "الرسالة طويلة جداً." });
       }
 
       try {
-        const reply = await askGemini(
-          PRIMARY_MODEL,
-          message
-        );
-
-        return send(res, 200, {
-          reply,
-          model: PRIMARY_MODEL
-        });
-
-      } catch (error) {
-        console.log(
-          "Primary model failed:",
-          error.message
-        );
-      }
-
-      try {
-        const reply = await askGemini(
-          FALLBACK_MODEL,
-          message
-        );
-
-        return send(res, 200, {
-          reply,
-          model: FALLBACK_MODEL
-        });
-
-      } catch (error) {
-        console.error(
-          "Fallback model failed:",
-          error.message
-        );
-
+        const result = await getGeminiReply(message);
+        return send(res, 200, result);
+      } catch {
         return send(res, 503, {
           error: "النموذجان مشغولان حالياً. حاول بعد قليل."
         });
       }
     }
 
-    return send(res, 404, {
-      error: "Not found"
-    });
+    return send(res, 404, { error: "Not found" });
 
   } catch (error) {
     console.error("SERVER ERROR:", error);
@@ -322,7 +535,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    "MOHAMED AI API running on port " + PORT
-  );
+  console.log("MOHAMED AI API running on port " + PORT);
 });
