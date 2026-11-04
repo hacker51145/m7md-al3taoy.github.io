@@ -38,13 +38,13 @@ function send(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 22 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let raw = "";
 
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 20000) {
+      if (raw.length > maxBytes) {
         reject(new Error("Request too large"));
         req.destroy();
       }
@@ -133,7 +133,152 @@ async function requireOwner(roomId, token) {
   return member;
 }
 
-// Gemini
+// أدوات حفظ وتشغيل المقاطع الصوتية الخاصة بالغرفة
+async function uploadRoomAudio(path, buffer, mimeType) {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/chat-audio/${encodedPath}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": mimeType,
+        "x-upsert": "false"
+      },
+      body: buffer
+    }
+  );
+
+  if (!response.ok) {
+    console.error("Audio storage upload failed:", await response.text());
+    throw new Error("تعذر حفظ المقطع الصوتي.");
+  }
+}
+
+async function createRoomAudioUrl(path) {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/sign/chat-audio/${encodedPath}`,
+    {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ expiresIn: 3600 })
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok || !data.signedURL) {
+    console.error("Audio signed URL failed:", data);
+    throw new Error("تعذر تجهيز تشغيل المقطع.");
+  }
+
+  return data.signedURL.startsWith("http")
+    ? data.signedURL
+    : `${SUPABASE_URL}/storage/v1${data.signedURL}`;
+}
+
+// إرسال التسجيل الصوتي إلى Gemini ليستمع إليه مباشرة
+async function askGeminiWithAudio(model, base64Audio, history, senderName) {
+  const contents = [
+    ...history.map(item => ({
+      role: item.sender_type === "assistant" ? "model" : "user",
+      parts: [{
+        text: `${item.sender_name}: ${item.message_type === "audio" ? "أرسل رسالة صوتية." : item.content}`
+      }]
+    })),
+    {
+      role: "user",
+      parts: [
+        {
+          text: `هذه رسالة صوتية من ${senderName}. استمع إليها وافهم المقصود، ثم أجب عنها مباشرة بالعربية السعودية. لا تعرض تفريغاً حرفياً للصوت؛ أرسل رداً طبيعياً على محتواه.`
+        },
+        {
+          inline_data: {
+            mime_type: "audio/wav",
+            data: base64Audio
+          }
+        }
+      ]
+    }
+  ];
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": API_KEY
+      },
+      body: JSON.stringify({
+        system_instruction: {
+          parts: [{ text: SYSTEM_PROMPT }]
+        },
+        contents,
+        generationConfig: {
+          maxOutputTokens: 700
+        }
+      }),
+      signal: AbortSignal.timeout(60000)
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Gemini audio error");
+  }
+
+  const reply = data.candidates?.[0]?.content?.parts
+    ?.map(part => part.text || "")
+    .join("")
+    .trim();
+
+  if (!reply) throw new Error("Empty audio response");
+
+  return reply;
+}
+
+async function getGeminiAudioReply(base64Audio, history, senderName) {
+  try {
+    return {
+      reply: await askGeminiWithAudio(
+        PRIMARY_MODEL,
+        base64Audio,
+        history,
+        senderName
+      ),
+      model: PRIMARY_MODEL
+    };
+  } catch (error) {
+    console.log("Primary audio model failed:", error.message);
+  }
+
+  try {
+    return {
+      reply: await askGeminiWithAudio(
+        FALLBACK_MODEL,
+        base64Audio,
+        history,
+        senderName
+      ),
+      model: FALLBACK_MODEL
+    };
+  } catch (error) {
+    console.error("Fallback audio model failed:", error.message);
+    throw new Error("تعذر فهم التسجيل الصوتي حالياً. حاول مرة ثانية.");
+  }
+}
+
+// Gemini للرسائل النصية
 async function askGemini(model, message, history = []) {
   const contents = [
     ...history.map(item => ({
@@ -236,6 +381,7 @@ const server = http.createServer(async (req, res) => {
       if (!VAPID_PUBLIC_KEY) {
         return send(res, 500, { error: "VAPID public key is missing" });
       }
+
       return send(res, 200, { publicKey: VAPID_PUBLIC_KEY });
     }
 
@@ -336,7 +482,9 @@ const server = http.createServer(async (req, res) => {
       );
 
       const room = rooms?.[0];
-      if (!room) return send(res, 404, { error: "رابط الدعوة غير صحيح." });
+      if (!room) {
+        return send(res, 404, { error: "رابط الدعوة غير صحيح." });
+      }
 
       const accessToken = newToken();
 
@@ -427,13 +575,125 @@ const server = http.createServer(async (req, res) => {
       }
 
       const messages = await supabase(
-        `chat_messages?room_id=eq.${encodeURIComponent(roomId)}&select=id,member_id,sender_name,sender_type,content,created_at&order=id.asc&limit=100`
+        `chat_messages?room_id=eq.${encodeURIComponent(roomId)}&select=id,member_id,sender_name,sender_type,content,message_type,audio_path,audio_mime_type,created_at&order=id.asc&limit=100`
       );
 
       return send(res, 200, { ok: true, messages: messages || [] });
     }
 
-    // إرسال رسالة داخل الغرفة ورد العطاوي عليها
+    // استقبال تسجيل صوتي داخل المجموعة وحفظه ثم فهمه بواسطة العطاوي
+    if (req.method === "POST" && pathname === "/api/rooms/audio") {
+      const body = await readBody(req);
+      const roomId = String(body.roomId || "");
+      const member = await requireApprovedMember(roomId, body.accessToken);
+
+      if (!member) {
+        return send(res, 403, { error: "انتظر موافقة صاحب الغرفة أولاً." });
+      }
+
+      if (!API_KEY) {
+        return send(res, 500, { error: "Gemini API key missing" });
+      }
+
+      const mimeType = String(body.mimeType || "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+
+      if (mimeType !== "audio/wav") {
+        return send(res, 400, { error: "يجب إرسال التسجيل بصيغة WAV." });
+      }
+
+      const base64Audio = String(body.audioBase64 || "");
+
+      if (!base64Audio || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64Audio)) {
+        return send(res, 400, { error: "ملف الصوت غير صالح." });
+      }
+
+      const audioBuffer = Buffer.from(base64Audio, "base64");
+
+      if (!audioBuffer.length || audioBuffer.length > 14 * 1024 * 1024) {
+        return send(res, 400, { error: "حجم التسجيل كبير جداً." });
+      }
+
+      const audioPath = `${roomId}/${crypto.randomUUID()}.wav`;
+
+      await uploadRoomAudio(audioPath, audioBuffer, "audio/wav");
+
+      const inserted = await supabase("chat_messages", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: roomId,
+          member_id: member.id,
+          sender_name: member.display_name,
+          sender_type: "user",
+          content: "🎤 رسالة صوتية",
+          message_type: "audio",
+          audio_path: audioPath,
+          audio_mime_type: "audio/wav"
+        })
+      });
+
+      const historyRows = await supabase(
+        `chat_messages?room_id=eq.${encodeURIComponent(roomId)}&select=sender_name,sender_type,content,message_type&order=id.desc&limit=20`
+      );
+
+      const history = (historyRows || []).reverse().slice(0, -1);
+
+      const result = await getGeminiAudioReply(
+        base64Audio,
+        history,
+        member.display_name
+      );
+
+      const botRows = await supabase("chat_messages", {
+        method: "POST",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          room_id: roomId,
+          member_id: null,
+          sender_name: "العطاوي",
+          sender_type: "assistant",
+          content: result.reply,
+          message_type: "text"
+        })
+      });
+
+      return send(res, 200, {
+        ok: true,
+        userMessage: inserted?.[0] || null,
+        assistantMessage: botRows?.[0] || null,
+        reply: result.reply,
+        model: result.model
+      });
+    }
+
+    // رابط تشغيل مؤقت للمقطع، لا يحصل عليه إلا عضو مقبول في الغرفة
+    if (req.method === "POST" && pathname === "/api/rooms/audio-url") {
+      const body = await readBody(req);
+      const roomId = String(body.roomId || "");
+      const member = await requireApprovedMember(roomId, body.accessToken);
+
+      if (!member) {
+        return send(res, 403, { error: "ليس لديك صلاحية تشغيل هذا المقطع." });
+      }
+
+      const audioPath = String(body.audioPath || "");
+
+      if (!audioPath.startsWith(roomId + "/") || audioPath.includes("..")) {
+        return send(res, 400, { error: "مسار المقطع غير صحيح." });
+      }
+
+      const signedUrl = await createRoomAudioUrl(audioPath);
+
+      return send(res, 200, {
+        ok: true,
+        signedUrl
+      });
+    }
+
+    // إرسال رسالة نصية داخل الغرفة ورد العطاوي عليها
     if (req.method === "POST" && pathname === "/api/rooms/messages") {
       const body = await readBody(req);
       const roomId = body.roomId;
