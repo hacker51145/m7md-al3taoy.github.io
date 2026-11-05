@@ -1056,7 +1056,7 @@ function startAlAtawiCall() {
   }
 
   if (!window.isSecureContext) {
-    alert("افتح العطاوي عبر رابط HTTPS.");
+    alert("افتح رايق ومسبب حرايق عبر رابط HTTPS.");
     return;
   }
 
@@ -1183,7 +1183,7 @@ function startListeningAgain() {
         return;
       }
 
-      setCallSubtitle("العطاوي يتحدث...");
+      setCallSubtitle("رايق ومسبب حرايق يتحدث...");
       $("avatarRing").classList.add("speaking");
 
       speakText(lastReply, () => {
@@ -1207,7 +1207,7 @@ function startListeningAgain() {
       voiceBusy = false;
 
       addMessage(
-        "تعذر الاتصال بالعطاوي: " + error.message,
+        "تعذر الاتصال رايق ومسبب حرايق: " + error.message,
         "assistant"
       );
 
