@@ -653,7 +653,7 @@ const server = http.createServer(async (req, res) => {
         body: JSON.stringify({
           room_id: roomId,
           member_id: null,
-          sender_name: "العطاوي",
+          sender_name: "رايق ومسبب حرايق",
           sender_type: "assistant",
           content: result.reply,
           message_type: "text"
