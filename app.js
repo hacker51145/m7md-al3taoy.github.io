@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const API = "https://mohamed-ai-api.onrender.com";
 const STORAGE = "mohamed-ai-room-v1";
 
-let lastReply = "أهلاً! أنا العطاوي.";
+let lastReply = "أهلاً! أنا رايق ومسبب حرايق.";
 let room = JSON.parse(localStorage.getItem(STORAGE) || "null");
 let lastMessageId = 0;
 let roomPolling = null;
